@@ -1,0 +1,5 @@
+# Python bytecode cache
+__pycache__/
+
+# Dein virtuelles Environment
+mein_venv/

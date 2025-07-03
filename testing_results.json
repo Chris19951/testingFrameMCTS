@@ -1,0 +1,18 @@
+{
+    "total_games": 10,
+    "player1_wins": 0,
+    "player2_wins": 0,
+    "draws": 10,
+    "results": [
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw",
+        "Draw"
+    ]
+}
