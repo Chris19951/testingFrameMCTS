@@ -287,7 +287,10 @@ class AlphaZero:
             if is_terminal:
                 returnMemory = []
                 for hist_neutral_state, hist_action_probs, hist_player in memory:
-                    hist_outcome = (value + negative_reward_for_each_action) if hist_player == player else self.game.get_opponent_value(value) + negative_reward_for_each_action
+                    hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
+                    if hist_outcome > 0: # bei einem Sieg wird vom Reward pro Zug -0,01 abgezogen
+                        hist_outcome += negative_reward_for_each_action
+                    #print(f"  Reward for player {hist_player}: {hist_outcome}")
                     returnMemory.append((
                         self.game.get_encoded_state(hist_neutral_state),
                         hist_action_probs,
@@ -366,11 +369,11 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
 
 args = {
     'C': 2,
-    'num_searches': 2000,
-    'num_iterations': 8,
+    'num_searches': 2500,
+    'num_iterations': 16,
     'num_selfPlay_iterations': 2000,
     'num_parallel_games': 100,
-    'num_epochs': 4,
+    'num_epochs': 8,
     'batch_size': 128,
     'temperature': 1.25,
     'dirichlet_epsilon': 0.25,
