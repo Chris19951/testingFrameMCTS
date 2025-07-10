@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-torch.manual_seed(0)
+#torch.manual_seed(0)
 import random
 import time
 import math
@@ -269,7 +269,8 @@ class AlphaZero:
         memory = []
         player = 1
         state = self.game.get_initial_state()
-        
+        negative_reward_for_each_action = 0 
+
         while True:
             neutral_state = self.game.change_perspective(state, player)
             action_probs = self.mcts.search(neutral_state)
@@ -280,13 +281,13 @@ class AlphaZero:
             action = np.random.choice(self.game.action_size, p=action_probs) # change to temperature_action_probs
             
             state = self.game.get_next_state(state, action, player)
-            
+            negative_reward_for_each_action += self.args['negative_reward_for_each_action']
             value, is_terminal = self.game.get_value_and_terminated(state, action)
-            
+
             if is_terminal:
                 returnMemory = []
                 for hist_neutral_state, hist_action_probs, hist_player in memory:
-                    hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
+                    hist_outcome = (value + negative_reward_for_each_action) if hist_player == player else self.game.get_opponent_value(value) + negative_reward_for_each_action
                     returnMemory.append((
                         self.game.get_encoded_state(hist_neutral_state),
                         hist_action_probs,
@@ -355,3 +356,27 @@ class TorchAgent:
 
 
 
+game = ConnectFour()
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model = ResNet_Torch(game, 9, 128, device)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
+
+args = {
+    'C': 2,
+    'num_searches': 2000,
+    'num_iterations': 8,
+    'num_selfPlay_iterations': 2000,
+    'num_parallel_games': 100,
+    'num_epochs': 4,
+    'batch_size': 128,
+    'temperature': 1.25,
+    'dirichlet_epsilon': 0.25,
+    'dirichlet_alpha': 0.3,
+    'negative_reward_for_each_action': -0.01
+}
+
+alphaZero = AlphaZero(model, optimizer, game, args)
+alphaZero.learn()

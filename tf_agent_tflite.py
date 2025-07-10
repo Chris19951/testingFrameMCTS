@@ -188,9 +188,9 @@ class MCTS:
         self.game = game
         self.args = args
 
-    @tf.function  # CHANGE: Graph-Mode für schnellere Inferenz
+    #@tf.function  # CHANGE: Graph-Mode für schnellere Inferenz
     def predict(self, encoded_state, interpreter):
-        
+        #print(encoded_state)
         # ------- Input vorbereiten
         input_details  = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
@@ -199,10 +199,10 @@ class MCTS:
         interpreter.set_tensor(input_details[0]['index'], input_data)
 
         # ------- Inferenz
-        start = time.perf_counter()
+        #start = time.perf_counter()
         interpreter.invoke()
-        dur_us = (time.perf_counter() - start) * 1_000_000
-        print(f"TFLite inference time: {dur_us:.0f} µs")
+        #dur_us = (time.perf_counter() - start) * 1_000_000
+        #print(f"TFLite inference time: {dur_us:.0f} µs")
 
         # ------- Outputs holen & ggf. de‑quantisieren
         policy_logits = _dequant_tflite_output(
@@ -223,8 +223,9 @@ class MCTS:
 
     def search(self, state):
         root = Node(self.game, self.args, state, visit_count=1)
-        interpreter = load_tflite_model("model_7_ConnectFour_integer_quant.tflite")
+        interpreter = load_tflite_model("raspi_model_connectFour_integer_quant.tflite")
         encoded_state = np.array(self.game.get_encoded_state(state))[np.newaxis, ...].astype(np.float32)
+        #print(f"Encoded state: {encoded_state}")
         policy, _ = self.predict(encoded_state, interpreter)  # CHANGE: predict mit tf.function
         #policy = tf.nn.softmax(policy_logits, axis=1).numpy().squeeze(0)
 
@@ -260,7 +261,7 @@ class MCTS:
                 else:
                     policy = valid_moves / np.sum(valid_moves)
 
-                value = value_out.numpy().item()
+                value = value_out
 
                 node.expand(policy)
                 

@@ -132,4 +132,4 @@ def start_testing(num_games=10, save_results=True):
 
 
 # Start testing with 100 games and save results
-start_testing(20, True)
+start_testing(10, True)
