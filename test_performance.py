@@ -1,5 +1,6 @@
 from torch_agent import MCTS_Torch, ConnectFour, ResNet_Torch, TorchAgent
 from tf_agent import ResNet_tf, TFAgent
+from tf_agent_tflite import TFLightAgent
 import torch
 import matplotlib.pyplot as plt
 import json
@@ -29,11 +30,6 @@ torch_agent = TorchAgent(model_torch, args_torch)
 
 ### INITIALIZE PARAMETER FOR THE SECOND AGENT ###
 
-# Modell initialisieren & laden
-model_tf = ResNet_tf(game, num_resBlocks=9, num_hidden=128)
-model_tf.build(input_shape=(None, game.row_count, game.column_count, 3))
-model_tf.load_weights("model_7_ConnectFour.weights.h5")
-model_tf.eval = lambda: None  # für Kompatibilität mit deinem PyTorch-Interface
 
 # Initialize the TensowFlow Agent with the choosen model and args
 args_tf = {
@@ -43,7 +39,7 @@ args_tf = {
     'dirichlet_alpha': 0.3
 }
 
-tf_agent = TFAgent(model_tf, args_tf)
+tf_agent = TFLightAgent(args_tf)
 
 
 def start_testing(num_games=10, save_results=True):
@@ -136,4 +132,4 @@ def start_testing(num_games=10, save_results=True):
 
 
 # Start testing with 100 games and save results
-start_testing(10, True)
+start_testing(20, True)

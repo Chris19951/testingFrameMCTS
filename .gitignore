@@ -2,4 +2,4 @@
 __pycache__/
 
 # Dein virtuelles Environment
-mein_venv/
+venv/

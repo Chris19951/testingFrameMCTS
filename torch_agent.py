@@ -78,10 +78,7 @@ class ConnectFour:
         encoded_state = np.stack(
             (state == -1, state == 0, state == 1)
         ).astype(np.float32)
-
         return encoded_state
-
-
 
 class ResNet_Torch(nn.Module):
     def __init__(self, game, num_resBlocks, num_hidden, device):
@@ -248,7 +245,6 @@ class MCTS_Torch:
                 policy /= np.sum(policy)
                 
                 value = value.item()
-                
                 node.expand(policy)
                 
             node.backpropagate(value)    

@@ -73,70 +73,16 @@ class ConnectFour:
     def change_perspective(self, state, player):
         return state * player
 
+   
     def get_encoded_state(self, state):
         encoded_state = np.stack(
             (state == -1, state == 0, state == 1)
         ).astype(np.float32)
-        encoded_state = np.transpose(encoded_state, (1, 2, 0))
-        encoded_state = np.expand_dims(encoded_state, axis=0)
-        return tf.convert_to_tensor(encoded_state, dtype=tf.float32)  # CHANGE: Direkt Tensor zurückgeben
+
+        return encoded_state
 
 
-class ResNet_tf(tf.keras.Model):
-    def __init__(self, game, num_resBlocks, num_hidden):
-        super().__init__()
-        
-        self.startBlock = keras.Sequential([
-            layers.Conv2D(num_hidden, 3, padding="same", input_shape=(game.row_count, game.column_count, 3)),
-            layers.BatchNormalization(),
-            layers.ReLU(),
-        ])
-        
-        self.backBone = [ResBlock(num_hidden) for _ in range(num_resBlocks)]
-        
-        self.policyHead = keras.Sequential([
-            layers.Conv2D(32, 3, padding="same"),
-            layers.BatchNormalization(),
-            layers.ReLU(),
-            layers.Flatten(),
-            layers.Dense(game.action_size)
-        ])
-        
-        self.valueHead = keras.Sequential([
-            layers.Conv2D(3, 3, padding="same"),
-            layers.BatchNormalization(),
-            layers.ReLU(),
-            layers.Flatten(),
-            layers.Dense(1, activation="tanh")
-        ])
 
-    def call(self, x, training=False):
-        x = self.startBlock(x, training=training)
-        for resBlock in self.backBone:
-            x = resBlock(x, training=training)
-        policy = self.policyHead(x, training=training)
-        value = self.valueHead(x, training=training)
-        return policy, value
-        
-class ResBlock(tf.keras.Model):
-    def __init__(self, num_hidden):
-        super().__init__()
-        self.conv1 = layers.Conv2D(num_hidden, 3, padding="same")
-        self.bn1 = layers.BatchNormalization()
-        self.conv2 = layers.Conv2D(num_hidden, 3, padding="same")
-        self.bn2 = layers.BatchNormalization()
-        self.relu = layers.ReLU()
-        
-    def call(self, x, training=False):
-        residual = x
-        x = self.conv1(x)
-        x = self.bn1(x, training=training)
-        x = self.relu(x)
-        x = self.conv2(x)
-        x = self.bn2(x, training=training)
-        x += residual
-        return self.relu(x)
-    
 
 class Node:
     def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
@@ -195,22 +141,92 @@ class Node:
             self.parent.backpropagate(value)  
 
 
+def _prep_tflite_input(encoded_state, input_details):
+    """
+    Wandelt ein (N, C, H, W)‑Array in das vom TFLite‑Interpreter erwartete
+    Format um ‑ inkl. optionaler Quantisierung.
+    """
+    # TFLite erwartet NHWC
+    if encoded_state.shape[1] in (1, 3):               # (N,C,H,W) ➜ (N,H,W,C)
+        input_data = np.transpose(encoded_state, (0, 2, 3, 1))
+    else:                                              # schon NHWC
+        input_data = encoded_state
+
+    scale, zero_pt = input_details[0]['quantization']
+    if scale > 0:                                      # quantisiertes Modell?
+        input_data = np.round(input_data / scale + zero_pt)
+        input_data = np.clip(input_data, -128, 127).astype(np.int8)
+    else:
+        input_data = input_data.astype(np.float32)
+
+    return input_data
+
+
+def _dequant_tflite_output(tensor, details):
+    scale, zero_pt = details['quantization']
+    if scale > 0:
+        return scale * (tensor.astype(np.float32) - zero_pt)
+    return tensor
+
+def load_tflite_model(tflite_path):
+    interpreter = tf.lite.Interpreter(model_path=tflite_path)
+    interpreter.allocate_tensors()
+    return interpreter
+
+def _softmax_numpy(x, axis=-1):
+    """
+    stabile Softmax für NumPy‑Arrays
+    """
+    x = x - np.max(x, axis=axis, keepdims=True)  # log‑trick
+    exp_x = np.exp(x)
+    return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+
+
+
 class MCTS:
-    def __init__(self, game, args, model):
+    def __init__(self, game, args):
         self.game = game
         self.args = args
-        self.model = model
 
     @tf.function  # CHANGE: Graph-Mode für schnellere Inferenz
-    def predict(self, x):
-        return self.model(x, training=False)
+    def predict(self, encoded_state, interpreter):
+        
+        # ------- Input vorbereiten
+        input_details  = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        input_data     = _prep_tflite_input(encoded_state, input_details)
+
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+
+        # ------- Inferenz
+        start = time.perf_counter()
+        interpreter.invoke()
+        dur_us = (time.perf_counter() - start) * 1_000_000
+        print(f"TFLite inference time: {dur_us:.0f} µs")
+
+        # ------- Outputs holen & ggf. de‑quantisieren
+        policy_logits = _dequant_tflite_output(
+            interpreter.get_tensor(output_details[1]['index']),
+            output_details[1]
+        ).flatten()
+
+        value = _dequant_tflite_output(
+            interpreter.get_tensor(output_details[0]['index']),
+            output_details[0]
+        ).flatten()
+
+        policy = _softmax_numpy(policy_logits)
+
+        return policy, float(value.squeeze())
+
+
 
     def search(self, state):
         root = Node(self.game, self.args, state, visit_count=1)
-        
-        encoded_state = self.game.get_encoded_state(state)  # Tensor direkt
-        policy_logits, _ = self.predict(encoded_state)  # CHANGE: predict mit tf.function
-        policy = tf.nn.softmax(policy_logits, axis=1).numpy().squeeze(0)
+        interpreter = load_tflite_model("model_7_ConnectFour_integer_quant.tflite")
+        encoded_state = np.array(self.game.get_encoded_state(state))[np.newaxis, ...].astype(np.float32)
+        policy, _ = self.predict(encoded_state, interpreter)  # CHANGE: predict mit tf.function
+        #policy = tf.nn.softmax(policy_logits, axis=1).numpy().squeeze(0)
 
         dirichlet_noise = np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size)
         policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * dirichlet_noise
@@ -233,9 +249,9 @@ class MCTS:
             value = self.game.get_opponent_value(value)
             
             if not is_terminal:
-                encoded_state = self.game.get_encoded_state(node.state)  # Tensor direkt
-                policy_logits, value_out = self.predict(encoded_state)  # CHANGE: predict mit tf.function
-                policy = tf.nn.softmax(policy_logits, axis=1).numpy().squeeze(0)
+                encoded_state = np.array(self.game.get_encoded_state(node.state))[np.newaxis, ...].astype(np.float32)
+                policy, value_out = self.predict(encoded_state, interpreter)  # CHANGE: predict mit tf.function
+
 
                 valid_moves = self.game.get_valid_moves(node.state)
                 policy *= valid_moves
@@ -295,46 +311,14 @@ class AlphaZero:
             
             player = self.game.get_opponent(player)
                 
-    def train(self, memory):
-        random.shuffle(memory)
-        for batchIdx in range(0, len(memory), self.args['batch_size']):
-            sample = memory[batchIdx:min(len(memory), batchIdx + self.args['batch_size'])]
-            state, policy_targets, value_targets = zip(*sample)
-            state = tf.concat(state, axis=0)  # alle Tensoren zusammenführen
-            policy_targets = np.array(policy_targets)
-            value_targets = np.array(value_targets).reshape(-1, 1)
-            
-            with tf.GradientTape() as tape:
-                out_policy, out_value = self.model(state, training=True)
-                policy_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=policy_targets, logits=out_policy))
-                value_loss = tf.reduce_mean(tf.square(out_value - value_targets))
-                loss = policy_loss + value_loss
-            
-            grads = tape.gradient(loss, self.model.trainable_variables)
-            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
-
-    def learn(self):
-        for iteration in range(self.args['num_iterations']):
-            print(f"[Iteration {iteration + 1}/{self.args['num_iterations']}]")
-            memory = []
-
-            for selfPlay_iteration in range(self.args['num_selfPlay_iterations']):
-                print(f"  Self-Play Iteration {selfPlay_iteration + 1}/{self.args['num_selfPlay_iterations']}")
-                memory += self.selfPlay()
-
-            for epoch in range(self.args['num_epochs']):
-                print(f"  Training Epoch {epoch + 1}/{self.args['num_epochs']}")
-                self.train(memory)
-
-            self.model.save_weights(f"model_{iteration}_{self.game}.weights.h5")
 
 
-class TFAgent:
-    def __init__(self, model, args):
+
+class TFLightAgent:
+    def __init__(self, args):
         self.game = ConnectFour()
-        self.model = model
         self.args = args
-        self.mcts = MCTS(self.game, args, model)
+        self.mcts = MCTS(self.game, args)
 
     def getAction(self, state):
         mcts_probs = self.mcts.search(state)
